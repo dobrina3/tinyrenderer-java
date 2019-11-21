@@ -26,6 +26,10 @@ public class TinyRenderer extends JPanel {
 	//Each triplet references indices in the vertices[] array.
 	
 	 public static double[][] zbuffer = null;  // z-buffer array
+	 
+	 public static double[][] zbufferShadow =null;
+	 double[][] M = null; //MShadow = ViewPort*Projection(ortho)*View(LookAt)*Model(Id) : Word to Screen Shadow buffer = zbufferShadow
+	 //M is the transformation matrix from the object space to the shadow buffer screen space.
 
 	 public static double uv[] = null; // Texture coordinates (u,v,0). The size equals to the number of vertices*3. 
 		//E.g: in order to access to the v component of vertex index i, you should write vertices[i*3+1]
@@ -520,18 +524,56 @@ public void drawTriangleMeshZBuffer(){
             }
         }
         
+        double[] light = {1., 1., 1. };
+        //double[] light = {1., 1., 0. };
+    	double normL = Math.sqrt(light[0]*light[0] + light[1]*light[1] + light[2]*light[2]);
+    	light[0] = light[0]/normL;
+    	light[1] = light[1]/normL;
+    	light[2] = light[2]/normL;
+    	    	
+    	 double[][] ViewPort = {
+    	    		{width/2.,    0.,       0.,    width/2.},
+    	    		{0.      ,  -height/2., 0,     height/2.},
+    	    		{0.,          0.,       1.,    1.},
+    	    		{0.,          0.,       0.,    1.}
+    	    		
+    	    };
+        
         for (int t=0; t< triangles.length/3; t++) { // iterate through all triangles
             double[] xw = new double[3]; // triangle in world coordinates
             double[] yw = new double[3];
             double[] zw = new double[3];
             int[] x = new int[3]; // triangle in screen coordinates
             int[] y = new int[3];
+            
+            double[] xS = new double[3]; // triangle in ViewPort coordinates
+            double[] yS = new double[3];
+            double[] zS = new double[3];
+            
             for (int v=0; v<3; v++) {
                 xw[v] = vertices[triangles[t*3+v]*3+0]; // world coordinates
                 yw[v] = vertices[triangles[t*3+v]*3+1];
                 zw[v] = vertices[triangles[t*3+v]*3+2];
-                x[v] = (int)( width*(xw[v]+1.)/2.+.5); // world-to-screen transformation
-                y[v] = (int)(height*(1.-yw[v])/2.+.5); // y is flipped to get a "natural" y orientation (origin in the bottom left corner)
+                
+                xS[v] = ViewPort[0][0]*xw[v] + ViewPort[0][1]*yw[v] + ViewPort[0][2]*zw[v] + ViewPort[0][3];
+                yS[v] = ViewPort[1][0]*xw[v] + ViewPort[1][1]*yw[v] + ViewPort[1][2]*zw[v] + ViewPort[1][3];
+                zS[v] = ViewPort[2][0]*xw[v] + ViewPort[2][1]*yw[v] + ViewPort[2][2]*zw[v] + ViewPort[2][3];
+                double w      = ViewPort[3][0]*xw[v] + ViewPort[3][1]*yw[v] + ViewPort[3][2]*zw[v] + ViewPort[3][3];
+                xS[v] = xS[v]/w;
+                yS[v] = yS[v]/w;
+                //zS[v] = zS[v]/w;
+                
+                
+                // world-to-screen transformation
+                //x[v] = (int)( width*(xw[v]/2 + 0.5));  // (xw+1)*width/2
+               //x[v] = (int)( width/2*xw[v] + width/2);
+                //y[v] = (int)(height*(-yw[v]/2 + 0.5)); // -[ (y+1)*height/2 ]
+               //y[v] = (int)(height/2*(-yw[v]) + height/2); 
+             // y is flipped to get a "natural" y orientation (origin in the bottom left corner)
+                
+                x[v] = (int) xS[v];
+                y[v] = (int) yS[v];
+                
             }
 
             int bbminx = width-1; // screen bounding box for the triangle to rasterize
@@ -544,15 +586,7 @@ public void drawTriangleMeshZBuffer(){
                 bbmaxx = Math.min(width-1,  Math.max(bbmaxx, x[v]));
                 bbmaxy = Math.min(height-1, Math.max(bbmaxy, y[v]));
             }
-            
-            double[] normal = triangle_normal(xw, yw, zw); 
-            double[] light = {0., 0., 1. };
-            	//int intensityDiffuse = (int)Math.min(255, Math.max(0, 255*dot_product(normal, new double[]{0.3, 0.3, 1.})));  
-            	// triangle intensity is the (clamped) cosine of the angle between the triangle normal and the light direction 
-            double diffuse = Math.max(0, dot_product(normal, light));
-            int intensity = (int) Math.min(255, 255*diffuse) ; 
-            int color = new Color(intensity, intensity, intensity).getRGB(); //color for the current TRIANGLE
-            
+                        
             try { // non-ivertible matrix (can happen if a triangle is degenerate)
                 for (int px=bbminx; px<=bbmaxx; px++) { // rasterize the bounding box
                     for (int py=bbminy; py<=bbmaxy; py++) {
@@ -561,6 +595,13 @@ public void drawTriangleMeshZBuffer(){
                         double pz = coord[0]*zw[0] + coord[1]*zw[1] + coord[2]*zw[2]; // compute the depth of the fragment
                         if (zbuffer[px][py]>pz) continue; // discard the fragment if it lies behind the z-buffer
                         zbuffer[px][py] = pz;
+                        
+                        double[] normal = triangle_normal(xw, yw, zw); 
+                      //int intensityDiffuse = (int)Math.min(255, Math.max(0, 255*dot_product(normal, new double[]{0.3, 0.3, 1.})));  
+                    	// triangle intensity is the (clamped) cosine of the angle between the triangle normal and the light direction 
+                        double diffuse = Math.max(0, dot_product(normal, light));
+                    	int intensity = (int) Math.min(255, 255*diffuse) ; 
+                    	int color = new Color(intensity, intensity, intensity).getRGB(); //color for the current TRIANGLE
    
                         image.setRGB(px, py, color);
                     }
@@ -574,22 +615,85 @@ public void drawTriangleMeshZBuffer(){
 	public void saveZBuffer()
 	{
 		 BufferedImage zbufferImage = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB );
+		 
+		 double min = Integer.MAX_VALUE;
+		 double max = Integer.MIN_VALUE;
+		 
 	        for (int i=0; i<width; i++) {
 	            for (int j=0; j<height; j++) {
-	            	if(zbuffer[i][j]<0){
-	            		int color = new Color(0F , 0F, (float)Math.abs(zbuffer[i][j])).getRGB();
-		            	zbufferImage.setRGB(i, j, color);
-	            	}
-	            	else{	            	
-	            		int color = new Color((float)Math.abs(zbuffer[i][j]) , 0F, 0F).getRGB();
-	            		zbufferImage.setRGB(i, j, color);
-	            	}
+	            	
+	            	 
+	            	 if(zbuffer[i][j]<min) min = zbuffer[i][j];
+	            	 if(zbuffer[i][j]>=max) max = zbuffer[i][j];
 	            	
 	            }
 	        }
+	        
+	        double delta = max-min;
+	        
+	        for (int i=0; i<width; i++) {
+	            for (int j=0; j<height; j++) {
+	            	
+	            	int intensity =(int) (((zbuffer[i][j] - min)) * (255/delta) );
+            		//System.out.println(" "+  intensity);
+            		int color = new Color(intensity , intensity, intensity)  .getRGB();
+	            	zbufferImage.setRGB(i, j, color);
+	            	
+	            }
+	        } 
+	        
 	        try {
 				ImageIO.write(zbufferImage, "png", new File("zbuffer.png"));
 			} catch (IOException ex) {ex.printStackTrace();}
+	        
+	        
+	        System.out.println("ZBuffer MIN value = "+  min);  
+	        System.out.println("ZBuffer MAX value = "+  max);
+	        System.out.println("ZBuffer Delta = " +  delta);
+	        
+	        
+	}
+
+//************************************************************************************
+	public void saveZShadowBuffer()
+	{
+		 BufferedImage zbufferImage = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB );
+		 
+		 double min = Integer.MAX_VALUE;
+		 double max = Integer.MIN_VALUE;
+		 
+	        for (int i=0; i<width; i++) {
+	            for (int j=0; j<height; j++) {
+	            	
+	            	 
+	            	 if(zbufferShadow[i][j]<min) min = zbufferShadow[i][j];
+	            	 if(zbufferShadow[i][j]>=max) max = zbufferShadow[i][j];
+	            	
+	            }
+	        }
+	        
+	        double delta = max-min;
+	        
+	        for (int i=0; i<width; i++) {
+	            for (int j=0; j<height; j++) {
+	            	
+	            	int intensity =(int) (((zbufferShadow[i][j] - min)) * (255/delta) );
+            		//System.out.println(" "+  intensity);
+            		int color = new Color(intensity , intensity, intensity)  .getRGB();
+	            	zbufferImage.setRGB(i, j, color);
+	            	
+	            }
+	        } 
+	        
+	        try {
+				ImageIO.write(zbufferImage, "png", new File("zbufferShadow.png"));
+			} catch (IOException ex) {ex.printStackTrace();}
+	        
+	        
+	        System.out.println("ZBuffer MIN value = "+  min);  
+	        System.out.println("ZBuffer MAX value = "+  max);
+	        System.out.println("ZBuffer Delta = " +  delta);
+	        
 	        
 	}
 
@@ -657,7 +761,7 @@ public void drawTriangleMeshZBuffer(){
  * One illumination calculation per triangle. Assign all pixels inside each triangle the same color.
  * Uses texture colors of the triangle vertices and makes an average color.
  */
-	public void FlatShadingTexture()
+	public void FlatShading_First()
 	{
 		zbuffer = new double[width][height]; // initialize the z-buffer
         for (int i=0; i<width; i++) {
@@ -672,23 +776,29 @@ public void drawTriangleMeshZBuffer(){
 		catch (FileNotFoundException e) {e.printStackTrace();} 
 		catch (IOException e) {e.printStackTrace();}
 		
-		BufferedImage texture = null;
-		int TexWidth=0; 
-		int TexHeight=0; 
-		try
-	    {
-	      // the line that reads the texture image file
-		  texture = ImageIO.read(new File("african_head_diffuse.png"));
-	      System.out.println("Texture : height = "+texture.getHeight() );
-	      System.out.println("Texture : width  = "+texture.getWidth() );
-	      TexWidth = texture.getWidth();
-	      TexHeight = texture.getHeight();
-	      // work with the image here ...
-	      //image = texture;
-	      
-	    } 
-	    catch (IOException e) { e.printStackTrace();}
+//		BufferedImage texture = null;
+//		int TexWidth=0; 
+//		int TexHeight=0; 
+//		try
+//	    {
+//	      // the line that reads the texture image file
+//		  texture = ImageIO.read(new File("african_head_diffuse.png"));
+//	      System.out.println("Texture : height = "+texture.getHeight() );
+//	      System.out.println("Texture : width  = "+texture.getWidth() );
+//	      TexWidth = texture.getWidth();
+//	      TexHeight = texture.getHeight();
+//	      // work with the image here ...
+//	      //image = texture;
+//	      
+//	    } 
+//	    catch (IOException e) { e.printStackTrace();}
+//		
 		
+        double[] light = new double[]{1., 1., 1.};
+        double normL = Math.sqrt(light[0]*light[0] + light[1]*light[1] + light[2]*light[2]);
+    	light[0] = light[0]/normL;
+    	light[1] = light[1]/normL;
+    	light[2] = light[2]/normL;
 		
 		 for (int t=0; t< triangles.length/3  ; t++) { // iterate through all triangles
 	            double[] xw = new double[3]; // triangle in world coordinates
@@ -696,9 +806,9 @@ public void drawTriangleMeshZBuffer(){
 	            double[] zw = new double[3];
 	            int[] x = new int[3]; // triangle in screen coordinates
 	            int[] y = new int[3];
-	            int[] TV = new int[3]; // triangle texture vertices
-	            double[] utex = new double[3]; // u tex coords
-	            double[] vtex = new double[3];
+//	            int[] TV = new int[3]; // triangle texture vertices
+//	            double[] utex = new double[3]; // u tex coords
+//	            double[] vtex = new double[3];
 	            for (int v=0; v<3; v++) {
 	                xw[v] = vertices[triangles[t*3+v]*3+0]; // world coordinates
 	                	//System.out.println("xw[v] = "+ xw[v]);
@@ -709,47 +819,47 @@ public void drawTriangleMeshZBuffer(){
 	                x[v] = (int)( width*(xw[v]+1.)/2.+.5); // world-to-screen transformation
 	                y[v] = (int)(height*(1.-yw[v])/2.+.5); // y is flipped to get a "natural" y orientation (origin in the bottom left corner)
 	                
-	                TV[v] = trianglesUV[t*3+v];
-	                	//System.out.println("TV[v] = "+ TV[v]);
-	                utex[v] = uv[trianglesUV[t*3+v]*3+0];
-	                	//System.out.println("utex[v] = " +utex[v]);
-	                vtex[v] = uv[trianglesUV[t*3+v]*3+1];
-	                	//System.out.println("vtex[v] = " +vtex[v]);
+//	                TV[v] = trianglesUV[t*3+v];
+//	                	//System.out.println("TV[v] = "+ TV[v]);
+//	                utex[v] = uv[trianglesUV[t*3+v]*3+0];
+//	                	//System.out.println("utex[v] = " +utex[v]);
+//	                vtex[v] = uv[trianglesUV[t*3+v]*3+1];
+//	                	//System.out.println("vtex[v] = " +vtex[v]);
 	            }
 	            
-	            int UImg0 = (int)(utex[0]*TexWidth);
-	            int VImg0 = (int)((1-vtex[0])*TexHeight); // v flipped !
-	            	//System.out.println("Pixel0 at : "+ UImg0 + " , "+VImg0 );
-	            Color pixel0 = new Color( texture.getRGB( UImg0, VImg0 ) );
-	            //System.out.println("Color 1 = " + pixel0);
+//	            int UImg0 = (int)(utex[0]*TexWidth);
+//	            int VImg0 = (int)((1-vtex[0])*TexHeight); // v flipped !
+//	            	//System.out.println("Pixel0 at : "+ UImg0 + " , "+VImg0 );
+//	            Color pixel0 = new Color( texture.getRGB( UImg0, VImg0 ) );
+//	            //System.out.println("Color 1 = " + pixel0);
+//	            
+//	            int UImg1 = (int)(utex[1]*TexWidth);
+//	            int VImg1 = (int)((1-vtex[1])*TexHeight); // v flipped !
+//	            	//System.out.println("Pixel1 at : "+ UImg1 + " , "+VImg1 );
+//	            Color pixel1 = new Color( texture.getRGB( UImg1, VImg1 ) );
+//	            //System.out.println("Color 2 = " + pixel1);
+//	            
+//	            int UImg2 = (int)(utex[2]*TexWidth);
+//	            int VImg2 = (int)((1-vtex[2])*TexHeight); // v flipped !
+//	            	//System.out.println("Pixel2 at : "+ UImg2 + " , "+VImg2 );
+//	            Color pixel2 = new Color( texture.getRGB( UImg2, VImg2 ) );
+//	            	//System.out.println("Color 3 = " + pixel2);
+//	            
+//	            int rtmp = (pixel0.getRed()+ pixel1.getRed()+pixel2.getRed())/3;
+//	            int gtmp = (pixel0.getGreen() + pixel1.getGreen() +pixel2.getGreen() )/3;
+//	            int btmp = (pixel0.getBlue() + pixel1.getBlue() + pixel2.getBlue()  )/3; 
+//	            Color COLOR = new Color(rtmp, gtmp,btmp); // average color !!!
+//	            	//System.out.println("COLOR = " + COLOR);
+//	            
+//	            double[] normal = triangle_normal(xw, yw, zw);
+//	            double dotProduct = dot_product(normal, new double[]{0., 0., 1.});
+//                
+//                int r = (int)Math.min(255, Math.max(0, COLOR.getRed()   *dotProduct )); 
+//                int g = (int)Math.min(255, Math.max(0, COLOR.getGreen() *dotProduct )); 
+//                int b = (int)Math.min(255, Math.max(0, COLOR.getBlue()  *dotProduct )); 
+//              
+//                Color color = new Color(r,g,b);
 	            
-	            int UImg1 = (int)(utex[1]*TexWidth);
-	            int VImg1 = (int)((1-vtex[1])*TexHeight); // v flipped !
-	            	//System.out.println("Pixel1 at : "+ UImg1 + " , "+VImg1 );
-	            Color pixel1 = new Color( texture.getRGB( UImg1, VImg1 ) );
-	            //System.out.println("Color 2 = " + pixel1);
-	            
-	            int UImg2 = (int)(utex[2]*TexWidth);
-	            int VImg2 = (int)((1-vtex[2])*TexHeight); // v flipped !
-	            	//System.out.println("Pixel2 at : "+ UImg2 + " , "+VImg2 );
-	            Color pixel2 = new Color( texture.getRGB( UImg2, VImg2 ) );
-	            	//System.out.println("Color 3 = " + pixel2);
-	            
-	            int rtmp = (pixel0.getRed()+ pixel1.getRed()+pixel2.getRed())/3;
-	            int gtmp = (pixel0.getGreen() + pixel1.getGreen() +pixel2.getGreen() )/3;
-	            int btmp = (pixel0.getBlue() + pixel1.getBlue() + pixel2.getBlue()  )/3; 
-	            Color COLOR = new Color(rtmp, gtmp,btmp); // average color !!!
-	            	//System.out.println("COLOR = " + COLOR);
-	            
-	            double[] normal = triangle_normal(xw, yw, zw);
-	            double dotProduct = dot_product(normal, new double[]{0., 0., 1.});
-                
-                int r = (int)Math.min(255, Math.max(0, COLOR.getRed()   *dotProduct )); 
-                int g = (int)Math.min(255, Math.max(0, COLOR.getGreen() *dotProduct )); 
-                int b = (int)Math.min(255, Math.max(0, COLOR.getBlue()  *dotProduct )); 
-              
-                Color color = new Color(r,g,b);
-
 	            int bbminx = width-1; // screen bounding box for the triangle to rasterize
 	            int bbminy = height-1;
 	            int bbmaxx = 0;
@@ -768,6 +878,13 @@ public void drawTriangleMeshZBuffer(){
 	                        double pz = coord[0]*zw[0] + coord[1]*zw[1] + coord[2]*zw[2]; // compute the depth of the fragment
 	                        if (zbuffer[px][py]>pz) continue; // discard the fragment if it lies behind the z-buffer
 	                        zbuffer[px][py] = pz;
+	                        
+	                        double[] normal = triangle_normal(xw, yw, zw);
+	        	            double dotProduct = dot_product(normal, light);
+	                        
+	                        int r = (int)Math.min(255, Math.max(0, 255   *dotProduct )); 
+	                       
+	                        Color color = new Color(r,r,r);
 	                        
 	                        image.setRGB(px, py, color.getRGB());
 	                    }
@@ -1828,22 +1945,22 @@ public void drawTriangleMeshZBuffer(){
         	            
         	            double[] NPix = new double[3]; // normal ot the current pixel
         	            Color colNormalMap = new Color( normalMap.getRGB( A, B ) ); // color from the texture 
-        	            NPix[0] = colNormalMap.getRed() -128;
+        	            NPix[0] = colNormalMap.getRed()  -128;
         	            NPix[1] = colNormalMap.getGreen()-128;
-        	            NPix[2] = colNormalMap.getBlue()-128;       	            
+        	            NPix[2] = colNormalMap.getBlue() -128;       	            
         	            double norm = Math.sqrt(NPix[0]*NPix[0] + NPix[1]*NPix[1] +  NPix[2]*NPix[2]); 
                         NPix[0] = NPix[0]/norm;
                         NPix[1] = NPix[1]/norm;
                         NPix[2] = NPix[2]/norm;
         	            
                         
-                        int intensityRED =   (int)Math.min(255, Math.max(0, col.getRed()   *dot_product(NPix, light))); 
-                        int intensityGREEN = (int)Math.min(255, Math.max(0, col.getGreen() *dot_product(NPix, light))); 
-                        int intensityBLUE =  (int)Math.min(255, Math.max(0, col.getBlue()  *dot_product(NPix, light))); 
+//                        int intensityRED =   (int)Math.min(255, Math.max(0, col.getRed()   *dot_product(NPix, light))); 
+//                        int intensityGREEN = (int)Math.min(255, Math.max(0, col.getGreen() *dot_product(NPix, light))); 
+//                        int intensityBLUE =  (int)Math.min(255, Math.max(0, col.getBlue()  *dot_product(NPix, light))); 
                         
-//                        int intensityRED =   (int)Math.min(255, Math.max(0, 255  *dot_product(NPix, light))); 
-//                        int intensityGREEN = (int)Math.min(255, Math.max(0, 255  *dot_product(NPix, light))); 
-//                        int intensityBLUE =  (int)Math.min(255, Math.max(0, 255  *dot_product(NPix, light))); 
+                        int intensityRED =   (int)Math.min(255, Math.max(0, 255  *dot_product(NPix, light))); 
+                        int intensityGREEN = (int)Math.min(255, Math.max(0, 255  *dot_product(NPix, light))); 
+                        int intensityBLUE =  (int)Math.min(255, Math.max(0, 255  *dot_product(NPix, light))); 
         	                
                         int color = new Color(intensityRED, intensityGREEN, intensityBLUE).getRGB(); 
                         image.setRGB(px, py, color);
@@ -2087,6 +2204,273 @@ public void SpecularShadingNormalMapping()
 
 
 //******************************************************************************************************************************************
+void FlatWithShadows_Pass1()
+{
+	
+    zbufferShadow = new double[width][height]; // initialize the z-buffer
+    for (int i=0; i<width; i++) {
+        for (int j=0; j<height; j++) {
+            zbufferShadow[i][j] = -1.;
+        }
+    }
+    double w=1;
+    
+//    double[][] Trans = {
+//			{Math.sqrt(3.)/Math.sqrt(6.) , 0,             -Math.sqrt(3.)/Math.sqrt(6.), 0},
+//			{-3/Math.sqrt(54.),             6/Math.sqrt(54.),              -3/Math.sqrt(54.),             0},
+//			{Math.sqrt(3.)/3,  Math.sqrt(3.)/3 , Math.sqrt(3.)/3, 0},
+//			{0,0,0,1}
+//	};
+    
+    //LookAt with camera at (1,1,1)
+    double[][] LookAt = {
+			{Math.sqrt(3.)/Math.sqrt(6.),   0,                 -Math.sqrt(3.)/Math.sqrt(6.), 0},
+			{-3/Math.sqrt(54.),             6/Math.sqrt(54.),  -3/Math.sqrt(54.),            0},
+			{Math.sqrt(3.)/3,               Math.sqrt(3.)/3 ,   Math.sqrt(3.)/3,             0},
+			{0,                             0,                  0,                           1}
+	}; 
+    
+    double[][] ViewPort = {
+    		{width/2.,    0.,        0.,    width/2.},
+    		{0.      ,  -height/2.,  0,     height/2.},
+    		{0.,          0.,        1.,    1.},
+    		{0.,          0.,        0.,    1.}
+    		
+    }; 
+    // ViewPort*Projection*LookAt*Model transforms the object's coordinates into the (framebuffer) screen space
+    // Projection = ortho; LookAt with camera at (1,1,1); Model is Id4 (unique object into the scene)
+    
+    M =  matrix_product(ViewPort, LookAt); 
+    //double[][] M = ViewPort;
+    
+    for (int t=0; t< triangles.length/3; t++) { // iterate through all triangles
+        double[] xw = new double[3]; // triangle in world coordinates
+        double[] yw = new double[3];
+        double[] zw = new double[3];
+        int[] x = new int[3]; // triangle in screen coordinates
+        int[] y = new int[3];
+        
+        double[] xS = new double[3]; // triangle in ViewPort*LookAt = M coordinates
+        double[] yS = new double[3];
+        double[] zS = new double[3];
+        
+      
+        for (int v=0; v<3; v++) {
+            xw[v] = vertices[triangles[t*3+v]*3+0]; // world coordinates
+            yw[v] = vertices[triangles[t*3+v]*3+1];
+            zw[v] = vertices[triangles[t*3+v]*3+2];
+                        
+//            xS[v] = Trans[0][0]*xw[v] + Trans[0][1]*yw[v] + Trans[0][2]*zw[v] + Trans[0][3];
+//            yS[v] = Trans[1][0]*xw[v] + Trans[1][1]*yw[v] + Trans[1][2]*zw[v] + Trans[1][3];
+//            zS[v] = Trans[2][0]*xw[v] + Trans[2][1]*yw[v] + Trans[2][2]*zw[v] + Trans[2][3];
+//            w     = Trans[3][0]*xw[v] + Trans[3][1]*yw[v] + Trans[3][2]*zw[v] + Trans[3][3];
+//            xS[v] = xS[v]/w;
+//            yS[v] = yS[v]/w;          
+//            x[v] = (int)( width*(xS[v]+1.)/2.+.5); // world-to-screen transformation
+//            y[v] = (int)(height*(1.-yS[v])/2.+.5); // y is flipped to get a "natural" y orientation (origin in the bottom left corner)
+//            
+            
+            xS[v] = M[0][0]*xw[v] + M[0][1]*yw[v] + M[0][2]*zw[v] + M[0][3];
+            yS[v] = M[1][0]*xw[v] + M[1][1]*yw[v] + M[1][2]*zw[v] + M[1][3];
+            zS[v] = M[2][0]*xw[v] + M[2][1]*yw[v] + M[2][2]*zw[v] + M[2][3];
+            w     = M[3][0]*xw[v] + M[3][1]*yw[v] + M[3][2]*zw[v] + M[3][3];
+            xS[v] = xS[v]/w;
+            yS[v] = yS[v]/w; 
+            zS[v] = zS[v]/w; 
+            x[v] = (int)xS[v];
+            y[v] = (int)yS[v];                
+        }
+        
+
+        int bbminx = width-1; // screen bounding box for the triangle to rasterize
+        int bbminy = height-1;
+        int bbmaxx = 0;
+        int bbmaxy = 0;
+        for (int v=0; v<3; v++) {
+            bbminx = Math.max(0, Math.min(bbminx, x[v])); // note that the bounding box is clamped to the actual screen size
+            bbminy = Math.max(0, Math.min(bbminy, y[v]));
+            bbmaxx = Math.min(width-1,  Math.max(bbmaxx, x[v]));
+            bbmaxy = Math.min(height-1, Math.max(bbmaxy, y[v]));
+        }
+        
+        
+        double[] light = {1., 1., 1. };
+        //double[] light = {1., 1., 0. };
+    	double normL = Math.sqrt(light[0]*light[0] + light[1]*light[1] + light[2]*light[2]);
+    	light[0] = light[0]/normL;
+    	light[1] = light[1]/normL;
+    	light[2] = light[2]/normL;
+    	 
+        try { // non-ivertible matrix (can happen if a triangle is degenerate)
+            for (int px=bbminx; px<=bbmaxx; px++) { // rasterize the bounding box
+                for (int py=bbminy; py<=bbmaxy; py++) {
+                    double[] coord = barycentric_coords((int)xS[0], (int)yS[0],  (int)xS[1], (int)yS[1], (int)xS[2], (int)yS[2], px, py);
+                    if (coord[0]<-0.01 || coord[1]<-0.01 || coord[2]<-0.01) continue; // discard the point outside the triangle
+                    double pz = coord[0]*zS[0] + coord[1]*zS[1] + coord[2]*zS[2]; // compute the depth of the fragment
+                    if (zbufferShadow[px][py]>pz) continue; // discard the fragment if it lies behind the z-buffer
+                    zbufferShadow[px][py] = pz;
+          
+                    //px, py and pz : coords in the light space    
+                    //System.out.println("px = " + px + " py = "+py);
+                    //System.out.println("pz       = " + pz);
+                    
+                  /* double[] normal = triangle_normal(xw, yw, zw); 
+                    double diffuse = Math.max(0, dot_product(normal, light));
+                    int intensity = (int) Math.min(255, 255*diffuse) ; 
+                    int color = new Color(intensity, intensity, intensity).getRGB(); 
+                    image.setRGB(px, py, color); */
+                }
+            }
+        } catch (IllegalStateException ex) {}
+    }//end for triangles
+    
+    
+    this.saveZShadowBuffer();
+    
+}
+
+//---------------------------------------------------------------------------------------------------------------------------------------
+void FlatWithShadows_Pass2()
+{
+	
+    zbuffer = new double[width][height]; // initialize the z-buffer
+    for (int i=0; i<width; i++) {
+        for (int j=0; j<height; j++) {
+            zbuffer[i][j] = -1.;
+        }
+    } 
+    
+    double w=1;
+    
+    double[][] ViewPort = {
+    		{width/2.,    0.     ,   0.,    width/2.},
+    		{0.      ,  -height/2.,  0,     height/2.},
+    		{0.,          0.,        1.,    1.},
+    		{0.,          0.,        0.,    1.}
+    		
+    }; 
+    // ViewPort*Projection*LookAt*Model transforms the object's coordinates into the (framebuffer) screen space
+    // Projection = ortho; LookAt with camera at (0,0,1) gives Id4; Model is Id4 (unique object into the scene)
+    
+  //matrix_inverse(ViewPort); 
+    double[][] ViewPortInverse = { {0.0025, 0,      0.,   -1.},
+    		                       {0.,    -0.0025, 0.,    1.},
+    		                       {0.,     0.,     1,    -1.},
+    		                       {0.,     0.,     0.,    1.}};
+    
+    double[][] Magic = matrix_product(M, ViewPortInverse);
+    
+    double[] light = {1., 1., 1. };
+    //double[] light = {1., 1., 0. };
+	double normL = Math.sqrt(light[0]*light[0] + light[1]*light[1] + light[2]*light[2]);
+	light[0] = light[0]/normL;
+	light[1] = light[1]/normL;
+	light[2] = light[2]/normL;
+    
+    for (int t=0; t< triangles.length/3; t++) { // iterate through all triangles
+        double[] xw = new double[3]; // triangle in world coordinates
+        double[] yw = new double[3];
+        double[] zw = new double[3];
+        int[] x = new int[3]; // triangle in screen coordinates
+        int[] y = new int[3]; 
+        
+        double[] xS = new double[3]; // triangle in screen (ViewPort) coordinates
+        double[] yS = new double[3];
+        double[] zS = new double[3];
+              
+        for (int v=0; v<3; v++) {
+            xw[v] = vertices[triangles[t*3+v]*3+0]; // world coordinates
+            yw[v] = vertices[triangles[t*3+v]*3+1];
+            zw[v] = vertices[triangles[t*3+v]*3+2];
+            
+            xS[v] = ViewPort[0][0]*xw[v] + ViewPort[0][1]*yw[v] + ViewPort[0][2]*zw[v] + ViewPort[0][3];
+            yS[v] = ViewPort[1][0]*xw[v] + ViewPort[1][1]*yw[v] + ViewPort[1][2]*zw[v] + ViewPort[1][3];
+            zS[v] = ViewPort[2][0]*xw[v] + ViewPort[2][1]*yw[v] + ViewPort[2][2]*zw[v] + ViewPort[2][3];
+            w     = ViewPort[3][0]*xw[v] + ViewPort[3][1]*yw[v] + ViewPort[3][2]*zw[v] + ViewPort[3][3];
+            xS[v] = xS[v]/w;
+            yS[v] = yS[v]/w;  
+            zS[v] = zS[v]/w; 
+            
+            x[v] = (int)xS[v]; //screen coords
+            y[v] = (int)yS[v];            
+            
+        }
+        
+        int bbminx = width-1; // screen bounding box for the triangle to rasterize
+        int bbminy = height-1;
+        int bbmaxx = 0;
+        int bbmaxy = 0;
+        for (int v=0; v<3; v++) {
+            bbminx = Math.max(0, Math.min(bbminx, x[v])); // note that the bounding box is clamped to the actual screen size
+            bbminy = Math.max(0, Math.min(bbminy, y[v]));
+            bbmaxx = Math.min(width-1,  Math.max(bbmaxx, x[v]));
+            bbmaxy = Math.min(height-1, Math.max(bbmaxy, y[v]));
+        }
+        
+            	       
+        try { // non-ivertible matrix (can happen if a triangle is degenerate)
+            for (int px=bbminx; px<=bbmaxx; px++) { // rasterize the bounding box
+                for (int py=bbminy; py<=bbmaxy; py++) {
+                    //double[] coord = barycentric_coords(x[0], y[0], x[1], y[1], x[2], y[2], px, py);
+                	double[] coord = barycentric_coords((int)xS[0], (int)yS[0],  (int)xS[1], (int)yS[1], (int)xS[2], (int)yS[2], px, py);
+                    if (coord[0]<-0.01 || coord[1]<-0.01 || coord[2]<-0.01) continue; // discard the point outside the triangle
+                    double pz = coord[0]*zS[0] + coord[1]*zS[1] + coord[2]*zS[2]; // compute the depth of the fragment
+                    if (zbuffer[px][py]>pz) continue; // discard the fragment if it lies behind the z-buffer
+                    zbuffer[px][py] = pz;
+                    
+                  //px, py and pz : coords in the screen space
+                    double[] screenCoords = {px, py, pz, 1};
+                    double[] shadowScreenCoords = {0,0,0,1};
+                    
+                    shadowScreenCoords[0] = Magic[0][0]*screenCoords[0] + Magic[0][1]*screenCoords[1] + Magic[0][2]*screenCoords[2] + Magic[0][3]*screenCoords[3];
+                    shadowScreenCoords[1] = Magic[1][0]*screenCoords[0] + Magic[1][1]*screenCoords[1] + Magic[1][2]*screenCoords[2] + Magic[1][3]*screenCoords[3];
+                    shadowScreenCoords[2] = Magic[2][0]*screenCoords[0] + Magic[2][1]*screenCoords[1] + Magic[2][2]*screenCoords[2] + Magic[2][3]*screenCoords[3];
+                    w                     = Magic[3][0]*screenCoords[0] + Magic[3][1]*screenCoords[1] + Magic[3][2]*screenCoords[2] + Magic[3][3]*screenCoords[3];
+                    shadowScreenCoords[0] = shadowScreenCoords[0]/w;
+                    shadowScreenCoords[1] = shadowScreenCoords[1]/w; 
+                    shadowScreenCoords[2] = shadowScreenCoords[2]/w; 
+                    
+                   
+                    int a = (int)shadowScreenCoords[0];
+                    int b = (int)shadowScreenCoords[1];
+
+                    	double shadow = zbufferShadow[a][b];
+                    	//System.out.println(" a = "+ a + " b = "+  b + " sh :" + shadow);
+                    	//System.out.println("px = " + px + " py = "+py);
+                        //System.out.println("pz       = " + pz);
+                        //System.out.println("shadow z = " + shadowScreenCoords[2]);
+                    
+                    
+                    	double[] normal = triangle_normal(xw, yw, zw); 
+                    	double diffuse = Math.max(0, dot_product(normal, light));
+                    	int intensity = 128;
+                    	int color = new Color(128, 128, 128).getRGB();;
+                    	if(shadow-.1 > shadowScreenCoords[2]) // the pixel is in the shadow 
+                    	{
+                    		intensity = (int) Math.min(255, 50*diffuse*(shadow-.1+1)) ; 
+                    		//color = new Color(0, 0, 255).getRGB();
+                    	}
+                    	else // the pixel is lit  
+                    	{
+                    		intensity = (int) Math.min(255, 50*diffuse*(shadow-.1+2)) ;  
+                    		//color = new Color(255, 0, 0).getRGB();
+                    	}
+                    	
+                    	/*if(shadow<0) {
+                    		color = new Color(0, 255, 0).getRGB();}*/
+                    	 
+                    	
+                    	color = new Color(intensity, intensity, intensity).getRGB(); 
+                    	image.setRGB(px, py, color);
+                    
+                }
+            }
+        } catch (IllegalStateException ex) {}
+    }//end for triangles
+    
+    //saveZBuffer();
+    
+}
 
 //*********************************************************************************************************************************************
 /**
@@ -2117,8 +2501,8 @@ public void SpecularShadingNormalMapping()
 		
 		//myRenderer.UVInterpolateOnly();
 		
-		//myRenderer.FlatShading();
-			//myRenderer.FlatShadingTexture(); // TO REMOVE
+		//myRenderer.FlatShading(); // with matrices
+		//myRenderer.FlatShading_First(); // first attempt without matrices
 		//myRenderer.FlatShadingUVTextureInterpolation();
 		
 		//myRenderer.GouraudShading();
@@ -2132,10 +2516,13 @@ public void SpecularShadingNormalMapping()
 		 //myRenderer.NormalMapping();
 		
 		 //myRenderer.SpecularShadingFlat();
-		 myRenderer.SpecularShadingNormalMapping();
+		 //myRenderer.SpecularShadingNormalMapping();
+		
+		myRenderer.FlatWithShadows_Pass1();
+		myRenderer.FlatWithShadows_Pass2();
 
 		try {
-			ImageIO.write(image, "png", new File("SpecularShadingNormalMapping.png"));
+			ImageIO.write(image, "png", new File("shadow.png"));
 		} catch (IOException ex) {ex.printStackTrace();}
 
 
